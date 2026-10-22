@@ -6,32 +6,15 @@ import { useGeocode, type GeocodeResult } from "@/hooks/use-geocode";
 import { cn } from "@/lib/utils";
 
 export interface LocationSearchInputProps {
-  /** Current text in the input. Controlled. */
   value: string;
-  /** Fires on every keystroke. Use to keep a plain text state in sync. */
   onChange: (value: string) => void;
-  /** Fires when a suggestion is clicked. This is the "location picked" event. */
   onSelect: (result: GeocodeResult) => void;
-  /** Placeholder for the input. */
   placeholder?: string;
-  /** Pass an existing id if this input is inside a <Label htmlFor=…>. */
   id?: string;
-  /** Optional className passthrough. */
   className?: string;
-  /** Suppress the dropdown — e.g. when the parent already has a picked value. */
   disabled?: boolean;
 }
 
-/**
- * LocationSearchInput
- *
- * A type-ahead search box for places. Debounced (400 ms), keyboard navigable
- * (↑ ↓ Enter Esc), and controlled via value/onChange/onSelect.
- *
- * It is deliberately stateless with respect to the *selected* location: it
- * only knows the current text. The parent decides what to do with the picked
- * result (drop a pin, fill a field, open a map, etc.).
- */
 export function LocationSearchInput({
   value,
   onChange,
@@ -46,7 +29,6 @@ export function LocationSearchInput({
   const [highlight, setHighlight] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Debounce the query the hook sees — 400 ms after last keystroke.
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(value), 400);
     return () => window.clearTimeout(t);
@@ -54,7 +36,6 @@ export function LocationSearchInput({
 
   const { data: results, isFetching } = useGeocode(debounced, { enabled: open && !disabled });
 
-  // Close the dropdown when the user clicks outside.
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!containerRef.current) return;
@@ -64,7 +45,6 @@ export function LocationSearchInput({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  // Reset highlight whenever the result list changes.
   useEffect(() => {
     setHighlight(0);
   }, [results]);
@@ -125,13 +105,7 @@ export function LocationSearchInput({
             className="absolute right-2 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground"
             onClick={() => {
               onChange("");
-              onSelect({
-                id: "",
-                name: "",
-                placeName: "",
-                lat: 0,
-                lng: 0,
-              });
+              onSelect({ id: "", name: "", placeName: "", lat: 0, lng: 0 });
             }}
           >
             <X className="h-3.5 w-3.5" />

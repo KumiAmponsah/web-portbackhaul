@@ -21,7 +21,13 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { useAuth } from "@/hooks/use-auth";
-import { useAssignments, useRespondToAssignment } from "@/hooks/use-assignments";
+import {
+  useAcceptOpenRequest,
+  useAssignments,
+  useDeclineOpenRequest,
+  useOpenRequests,
+  useRespondToAssignment,
+} from "@/hooks/use-assignments";
 import { useMyDriverRecord, useSetDriverAvailability, useTrucks } from "@/hooks/use-fleet";
 import { usePayouts } from "@/hooks/use-payments";
 import { useShipments } from "@/hooks/use-shipments";
@@ -38,6 +44,38 @@ const ACTIVE_TRIP_STATUSES = [
   "ARRIVED_DESTINATION",
 ];
 
+/** One card in the invitations list, whether it was sent to this driver or broadcast by truck type. */
+interface Invitation {
+  key: string;
+  assignmentId: string;
+  kind: "direct" | "open";
+  cargoRef: string | null;
+  description: string | null;
+  weightKg: number | null;
+  origin: string | null;
+  destination: string | null;
+  fee: number | null;
+  truckType: string;
+  capacityTons: number | null;
+  pickupAt: string | null;
+  notes: string | null;
+}
+
+const friendlyErrors: Record<string, string> = {
+  REQUEST_NO_LONGER_AVAILABLE: "Another driver already took this job.",
+  TRUCK_DOES_NOT_MATCH_REQUEST: "Your truck doesn't match this request.",
+  NO_TRUCK_LINKED: "Link a truck to your profile before accepting jobs.",
+  DRIVER_NOT_VERIFIED: "Your driver account must be verified to accept jobs.",
+};
+
+function explain(error: unknown): string {
+  const message = describeError(error);
+  for (const [code, text] of Object.entries(friendlyErrors)) {
+    if (message.includes(code)) return text;
+  }
+  return message;
+}
+
 export default function DriverHome() {
   const { profile } = useAuth();
   const {
@@ -48,6 +86,7 @@ export default function DriverHome() {
     refetch: refetchDriver,
   } = useMyDriverRecord();
   const { data: assignments } = useAssignments();
+  const { data: openRequests } = useOpenRequests();
   const { data: trips } = useTrips();
   const { data: shipments } = useShipments();
   const { data: trucks } = useTrucks();
@@ -55,23 +94,61 @@ export default function DriverHome() {
 
   const setAvailability = useSetDriverAvailability();
   const respond = useRespondToAssignment();
+  const acceptOpen = useAcceptOpenRequest();
+  const declineOpen = useDeclineOpenRequest();
   const [busyId, setBusyId] = useState<string | null>(null);
-
-  const offers = useMemo(
-    () => (assignments ?? []).filter((a) => a.status === "OFFERED"),
-    [assignments],
-  );
-
-  const activeTrip = useMemo(
-    () => (trips ?? []).find((t) => ACTIVE_TRIP_STATUSES.includes(t.status)) ?? null,
-    [trips],
-  );
 
   const shipmentById = useMemo(() => {
     const map = new Map<string, NonNullable<typeof shipments>[number]>();
     for (const shipment of shipments ?? []) map.set(shipment.id, shipment);
     return map;
   }, [shipments]);
+
+  const invitations = useMemo<Invitation[]>(() => {
+    const direct: Invitation[] = (assignments ?? [])
+      .filter((a) => a.status === "OFFERED")
+      .map((a) => {
+        const shipment = shipmentById.get(a.shipment_id);
+        return {
+          key: `direct-${a.id}`,
+          assignmentId: a.id,
+          kind: "direct",
+          cargoRef: shipment?.cargo_ref ?? null,
+          description: shipment?.description ?? null,
+          weightKg: shipment?.weight_kg ?? null,
+          origin: a.route_origin,
+          destination: a.route_destination,
+          fee: a.offered_fee_ghs,
+          truckType: a.truck_type,
+          capacityTons: a.required_capacity_tons,
+          pickupAt: a.pickup_at,
+          notes: a.requirements_notes,
+        };
+      });
+
+    const open: Invitation[] = (openRequests ?? []).map((r) => ({
+      key: `open-${r.id}`,
+      assignmentId: r.id,
+      kind: "open",
+      cargoRef: r.cargo_ref,
+      description: r.cargo_description,
+      weightKg: r.weight_kg,
+      origin: r.route_origin,
+      destination: r.route_destination,
+      fee: r.offered_fee_ghs,
+      truckType: r.truck_type,
+      capacityTons: r.required_capacity_tons,
+      pickupAt: r.pickup_at,
+      notes: r.requirements_notes,
+    }));
+
+    return [...direct, ...open];
+  }, [assignments, openRequests, shipmentById]);
+
+  const activeTrip = useMemo(
+    () => (trips ?? []).find((t) => ACTIVE_TRIP_STATUSES.includes(t.status)) ?? null,
+    [trips],
+  );
 
   const truck = useMemo(
     () => (trucks ?? []).find((t) => t.id === driver?.assigned_truck_id) ?? null,
@@ -82,17 +159,34 @@ export default function DriverHome() {
     const rows = payouts ?? [];
     return {
       paid: rows.filter((p) => p.status === "PAID").reduce((sum, p) => sum + Number(p.amount_ghs), 0),
-      pending: rows.filter((p) => p.status !== "PAID" && p.status !== "CANCELLED").reduce((sum, p) => sum + Number(p.amount_ghs), 0),
+      pending: rows
+        .filter((p) => p.status !== "PAID" && p.status !== "CANCELLED")
+        .reduce((sum, p) => sum + Number(p.amount_ghs), 0),
     };
   }, [payouts]);
 
-  async function handleRespond(assignmentId: string, accept: boolean) {
-    setBusyId(assignmentId);
+  async function handleRespond(invitation: Invitation, accept: boolean) {
+    setBusyId(invitation.key);
     try {
-      await respond.mutateAsync({ assignmentId, accept, reason: accept ? undefined : "Declined by driver" });
+      if (invitation.kind === "open") {
+        if (accept) {
+          await acceptOpen.mutateAsync(invitation.assignmentId);
+        } else {
+          await declineOpen.mutateAsync({
+            assignmentId: invitation.assignmentId,
+            reason: "Declined by driver",
+          });
+        }
+      } else {
+        await respond.mutateAsync({
+          assignmentId: invitation.assignmentId,
+          accept,
+          reason: accept ? undefined : "Declined by driver",
+        });
+      }
       toast.success(accept ? "Job accepted. Your trip has been created." : "Job declined.");
     } catch (error) {
-      toast.error(describeError(error));
+      toast.error(explain(error));
     } finally {
       setBusyId(null);
     }
@@ -111,7 +205,11 @@ export default function DriverHome() {
   if (driverFailed) {
     return (
       <div className="p-8">
-        <QueryErrorState error={driverError} onRetry={() => void refetchDriver()} subject="your driver profile" />
+        <QueryErrorState
+          error={driverError}
+          onRetry={() => void refetchDriver()}
+          subject="your driver profile"
+        />
       </div>
     );
   }
@@ -131,7 +229,11 @@ export default function DriverHome() {
       <PageHeader
         eyebrow="Driver"
         title={profile?.full_name ?? "Driver"}
-        subtitle={truck ? `Assigned truck ${truck.registration_no} · ${truck.capacity_tons}T` : "No truck linked yet"}
+        subtitle={
+          truck
+            ? `Assigned truck ${truck.registration_no} · ${truck.truck_type.replace(/_/g, " ")} · ${truck.capacity_tons}T`
+            : "No truck linked yet"
+        }
       />
 
       {/* Availability — the primary driver control, deliberately large */}
@@ -198,78 +300,79 @@ export default function DriverHome() {
         )}
       </section>
 
-      {/* Job offers */}
+      {/* Job invitations: direct offers + open requests matching this driver's truck type */}
       <section>
-        <h2 className="eyebrow mb-3">Job invitations ({offers.length})</h2>
-        {offers.length === 0 ? (
+        <h2 className="eyebrow mb-3">Job invitations ({invitations.length})</h2>
+        {invitations.length === 0 ? (
           <div className="panel">
             <EmptyState
               icon={Package}
               title="No job offers right now"
-              description="Stay available and verified — matching offers will arrive here and by notification."
+              description={
+                truck
+                  ? `Stay available and verified — new ${truck.truck_type.replace(/_/g, " ").toLowerCase()} jobs will appear here and by notification.`
+                  : "Stay available and verified — matching offers will arrive here and by notification."
+              }
             />
           </div>
         ) : (
           <div className="space-y-4">
-            {offers.map((offer) => {
-              const shipment = shipmentById.get(offer.shipment_id);
-              return (
-                <article key={offer.id} className="panel animate-rise p-6">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <span className="font-mono text-sm font-bold tabular text-muted-foreground">
-                        {shipment?.cargo_ref ?? "New job"}
-                      </span>
-                      <h3 className="mt-1 text-xl font-extrabold">
-                        {offer.route_origin} → {offer.route_destination}
-                      </h3>
-                    </div>
-                    <span className="font-mono text-2xl font-extrabold tabular text-primary">
-                      {formatGhs(offer.offered_fee_ghs)}
+            {invitations.map((offer) => (
+              <article key={offer.key} className="panel animate-rise p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <span className="font-mono text-sm font-bold tabular text-muted-foreground">
+                      {offer.cargoRef ?? "New job"}
                     </span>
+                    <h3 className="mt-1 text-xl font-extrabold">
+                      {offer.origin} → {offer.destination}
+                    </h3>
                   </div>
+                  <span className="font-mono text-2xl font-extrabold tabular text-primary">
+                    {formatGhs(offer.fee)}
+                  </span>
+                </div>
 
-                  <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4 text-sm sm:grid-cols-4">
-                    <Field label="Cargo" value={shipment?.description ?? offer.truck_type.replace(/_/g, " ")} />
-                    <Field label="Weight" value={formatWeight(shipment?.weight_kg ?? null)} />
-                    <Field label="Truck type" value={offer.truck_type.replace(/_/g, " ")} />
-                    <Field label="Pickup" value={formatDateTime(offer.pickup_at)} />
-                  </dl>
+                <dl className="mt-5 grid grid-cols-2 gap-4 border-t border-border pt-4 text-sm sm:grid-cols-4">
+                  <Field label="Cargo" value={offer.description ?? offer.truckType.replace(/_/g, " ")} />
+                  <Field label="Weight" value={formatWeight(offer.weightKg)} />
+                  <Field label="Truck type" value={offer.truckType.replace(/_/g, " ")} />
+                  <Field label="Pickup" value={formatDateTime(offer.pickupAt)} />
+                </dl>
 
-                  {offer.requirements_notes ? (
-                    <p className="mt-3 rounded-md bg-muted/60 p-3 text-sm text-muted-foreground">
-                      {offer.requirements_notes}
-                    </p>
-                  ) : null}
+                {offer.notes ? (
+                  <p className="mt-3 rounded-md bg-muted/60 p-3 text-sm text-muted-foreground">
+                    {offer.notes}
+                  </p>
+                ) : null}
 
-                  <div className="mt-5 flex gap-3">
-                    <Button
-                      size="lg"
-                      className="h-14 flex-1 text-base"
-                      onClick={() => void handleRespond(offer.id, true)}
-                      disabled={busyId === offer.id}
-                    >
-                      {busyId === offer.id ? (
-                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                      ) : (
-                        <Check className="mr-2 h-5 w-5" />
-                      )}
-                      Accept
-                    </Button>
-                    <Button
-                      size="lg"
-                      variant="outline"
-                      className="h-14 flex-1 text-base"
-                      onClick={() => void handleRespond(offer.id, false)}
-                      disabled={busyId === offer.id}
-                    >
-                      <X className="mr-2 h-5 w-5" />
-                      Decline
-                    </Button>
-                  </div>
-                </article>
-              );
-            })}
+                <div className="mt-5 flex gap-3">
+                  <Button
+                    size="lg"
+                    className="h-14 flex-1 text-base"
+                    onClick={() => void handleRespond(offer, true)}
+                    disabled={busyId === offer.key}
+                  >
+                    {busyId === offer.key ? (
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    ) : (
+                      <Check className="mr-2 h-5 w-5" />
+                    )}
+                    Accept
+                  </Button>
+                  <Button
+                    size="lg"
+                    variant="outline"
+                    className="h-14 flex-1 text-base"
+                    onClick={() => void handleRespond(offer, false)}
+                    disabled={busyId === offer.key}
+                  >
+                    <X className="mr-2 h-5 w-5" />
+                    Decline
+                  </Button>
+                </div>
+              </article>
+            ))}
           </div>
         )}
       </section>
@@ -281,11 +384,15 @@ export default function DriverHome() {
             <CircleDollarSign className="h-4 w-4" aria-hidden />
             Paid out
           </p>
-          <p className="mt-1 font-mono text-2xl font-extrabold tabular text-status-verified">{formatGhs(earnings.paid)}</p>
+          <p className="mt-1 font-mono text-2xl font-extrabold tabular text-status-verified">
+            {formatGhs(earnings.paid)}
+          </p>
         </div>
         <div className="panel p-5">
           <p className="text-sm font-medium text-muted-foreground">Awaiting release</p>
-          <p className="mt-1 font-mono text-2xl font-extrabold tabular text-status-pending">{formatGhs(earnings.pending)}</p>
+          <p className="mt-1 font-mono text-2xl font-extrabold tabular text-status-pending">
+            {formatGhs(earnings.pending)}
+          </p>
         </div>
       </section>
 

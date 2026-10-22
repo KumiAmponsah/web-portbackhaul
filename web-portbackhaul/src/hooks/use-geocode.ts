@@ -29,8 +29,6 @@ interface MapboxResponse {
  *
  * Uses Mapbox Geocoding v5. The `country=gh` bias makes Ghanaian results
  * rank first, but other countries still appear for cross-border routes.
- * `proximity` is intentionally omitted here; Step 4 will pass it in when we
- * want "suggestions near the map centre".
  */
 export function useGeocode(query: string, options?: { limit?: number; enabled?: boolean }) {
   const trimmed = query.trim();
@@ -71,34 +69,83 @@ export function useGeocode(query: string, options?: { limit?: number; enabled?: 
   });
 }
 
-/**
- * Reverse geocoding — { lat, lng } → "Tema Port, Tema, Ghana"
- *
- * Used in Step 4 when the user clicks on the map. Returns the nearest
- * named place within a few metres.
- */
-export async function reverseGeocode(lat: number, lng: number): Promise<GeocodeResult | null> {
+/* ------------------------------------------------------------------ */
+/*  Reverse geocoding                                                  */
+/* ------------------------------------------------------------------ */
+
+function toResult(f: MapboxFeature): GeocodeResult {
+  return {
+    id: f.id,
+    name: f.text,
+    placeName: f.place_name,
+    lat: f.center[1],
+    lng: f.center[0],
+  };
+}
+
+/** Distance in metres between two lat/lng points. */
+function haversineMeters(aLat: number, aLng: number, bLat: number, bLng: number): number {
+  const R = 6371000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+async function reverseRequest(
+  lat: number,
+  lng: number,
+  types: string,
+  limit: number,
+): Promise<MapboxFeature[]> {
   if (!MAPBOX_TOKEN) throw new Error("Mapbox token not configured.");
 
   const params = new URLSearchParams({
     access_token: MAPBOX_TOKEN,
-    limit: "1",
-    types: "place,locality,region,country,address,poi",
+    limit: String(limit),
+    types,
   });
-
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${lng},${lat}.json?${params.toString()}`;
   const response = await fetch(url);
-  if (!response.ok) return null;
+  if (!response.ok) return [];
+  const data = (await response.json()) as { features?: MapboxFeature[] };
+  return data.features ?? [];
+}
 
-  const data = (await response.json()) as MapboxResponse;
-  const first = data.features?.[0];
-  if (!first) return null;
+/**
+ * Generic reverse geocoding for one or more types (limit is 1 because Mapbox
+ * only allows multiple results when a single type is requested).
+ */
+export async function reverseGeocode(
+  lat: number,
+  lng: number,
+  types = "address,neighborhood,locality,place",
+): Promise<GeocodeResult | null> {
+  const features = await reverseRequest(lat, lng, types, 1);
+  return features[0] ? toResult(features[0]) : null;
+}
 
-  return {
-    id: first.id,
-    name: first.text,
-    placeName: first.place_name,
-    lat: first.center[1],
-    lng: first.center[0],
-  };
+/**
+ * Nearest named place of interest (hotel, church, port, shop…) within
+ * `maxMeters` of the point. Returns null when nothing is close enough.
+ */
+export async function reverseGeocodeNearestPoi(
+  lat: number,
+  lng: number,
+  maxMeters = 120,
+): Promise<GeocodeResult | null> {
+  // A single type lets Mapbox return several candidates.
+  const features = await reverseRequest(lat, lng, "poi", 5);
+  let best: { feature: MapboxFeature; dist: number } | null = null;
+
+  for (const f of features) {
+    const dist = haversineMeters(lat, lng, f.center[1], f.center[0]);
+    if (dist <= maxMeters && (!best || dist < best.dist)) {
+      best = { feature: f, dist };
+    }
+  }
+  return best ? toResult(best.feature) : null;
 }

@@ -1,55 +1,68 @@
 import "mapbox-gl/dist/mapbox-gl.css";
 
-import { useMemo } from "react";
-import Map, { type MapProps } from "react-map-gl/mapbox";
+import { forwardRef, useMemo } from "react";
+import Map, { type MapProps, type MapRef } from "react-map-gl/mapbox";
 
 import { cn } from "@/lib/utils";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string | undefined;
 
-/** Geographic centre of Ghana — a sensible default for a Ghana-first product. */
 export const GHANA_CENTER = { lat: 7.9465, lng: -1.0232 };
 export const GHANA_ZOOM = 6.5;
 
-/** Greater Accra / Tema — useful when the user has opened a map from a port view. */
 export const ACCRA_CENTER = { lat: 5.6037, lng: -0.1870 };
 export const ACCRA_ZOOM = 11;
+
+export const DEFAULT_MAP_STYLE = "mapbox://styles/mapbox/streets-v12";
+export const LIGHT_MAP_STYLE = "mapbox://styles/mapbox/light-v11";
 
 export interface BaseMapProps {
   /** Initial centre. Defaults to Ghana. */
   center?: { lat: number; lng: number };
   /** Initial zoom. Defaults to Ghana-zoom. */
   zoom?: number;
+  /**
+   * When provided, the map becomes "controlled" — its centre follows this prop
+   * instead of internal state. Use for "fly to location" flows.
+   */
+  controlledCenter?: { lat: number; lng: number } | null;
+  /** When provided with `controlledCenter`, the zoom follows this prop too. */
+  controlledZoom?: number | null;
   /** Pixel height of the map. Defaults to 400. */
   height?: number | string;
+  /** Mapbox style URL. Defaults to streets-v12. */
+  mapStyle?: string;
   className?: string;
-  /** Passed straight through to react-map-gl's <Map>. */
   interactive?: boolean;
-  /** Optional children (markers, popups, sources/layers). */
   children?: React.ReactNode;
-  /** Escape hatch — any additional react-map-gl props. */
   mapProps?: Omit<MapProps, "initialViewState" | "mapboxAccessToken" | "mapStyle">;
 }
 
 /**
  * BaseMap
  *
- * A thin wrapper around react-map-gl + Mapbox. Isolated so a caller never
- * touches the Mapbox token or the map library directly — swapping to MapLibre
- * later means editing this file only.
+ * A thin wrapper around react-map-gl + Mapbox. In uncontrolled mode it sets
+ * initialViewState and lets the user pan/zoom freely. In controlled mode,
+ * pass `controlledCenter`/`controlledZoom` and the map snaps to those values.
  *
- * The token comes from VITE_MAPBOX_TOKEN. If it is missing, a clear error
- * card is rendered instead of a broken map.
+ * Forward the ref (`ref={mapRef}`) to get the raw Mapbox Map instance — used
+ * by the location picker to call `flyTo()` programmatically.
  */
-export function BaseMap({
-  center = GHANA_CENTER,
-  zoom = GHANA_ZOOM,
-  height = 400,
-  className,
-  interactive = true,
-  children,
-  mapProps,
-}: BaseMapProps) {
+export const BaseMap = forwardRef<MapRef, BaseMapProps>(function BaseMap(
+  {
+    center = GHANA_CENTER,
+    zoom = GHANA_ZOOM,
+    controlledCenter = null,
+    controlledZoom = null,
+    height = 400,
+    mapStyle = DEFAULT_MAP_STYLE,
+    className,
+    interactive = true,
+    children,
+    mapProps,
+  },
+  ref,
+) {
   const initialViewState = useMemo(
     () => ({
       longitude: center.lng,
@@ -58,6 +71,15 @@ export function BaseMap({
     }),
     [center.lat, center.lng, zoom],
   );
+
+  const controlledViewState = useMemo(() => {
+    if (!controlledCenter) return null;
+    return {
+      longitude: controlledCenter.lng,
+      latitude: controlledCenter.lat,
+      zoom: controlledZoom ?? zoom,
+    };
+  }, [controlledCenter, controlledZoom, zoom]);
 
   if (!MAPBOX_TOKEN) {
     return (
@@ -84,9 +106,12 @@ export function BaseMap({
       style={{ height }}
     >
       <Map
-        initialViewState={initialViewState}
+        ref={ref}
+        {...(controlledViewState
+          ? { ...controlledViewState, transitionDuration: 600 }
+          : { initialViewState })}
         mapboxAccessToken={MAPBOX_TOKEN}
-        mapStyle="mapbox://styles/mapbox/streets-v12"
+        mapStyle={mapStyle}
         interactive={interactive}
         attributionControl
         {...mapProps}
@@ -95,4 +120,4 @@ export function BaseMap({
       </Map>
     </div>
   );
-}
+});

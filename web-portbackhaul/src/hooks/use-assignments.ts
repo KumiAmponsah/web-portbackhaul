@@ -56,11 +56,55 @@ export interface AssignmentWithDetails extends ShipmentAssignment {
 const ASSIGNMENT_COLUMNS =
   "id, shipment_id, requested_by, truck_type, required_capacity_tons, pickup_at, route_origin, route_destination, requirements_notes, offered_fee_ghs, truck_id, driver_id, status, decline_reason, responded_at, created_at";
 
+type DriverDetails = NonNullable<AssignmentWithDetails["driver"]>;
+
+/**
+ * `drivers` only holds the driver record; the name and phone live in
+ * `profiles`. Fetch both and merge them, keyed by the drivers.id value.
+ */
+async function fetchDriverDetails(driverIds: string[]): Promise<Map<string, DriverDetails>> {
+  const result = new Map<string, DriverDetails>();
+  if (driverIds.length === 0) return result;
+
+  const { data: driverRows, error } = await supabase
+    .from("drivers")
+    .select("id, profile_id, verification_status")
+    .in("id", driverIds);
+
+  if (error) {
+    console.warn("drivers enrich failed", error.message);
+    return result;
+  }
+
+  const profileIds = Array.from(
+    new Set((driverRows ?? []).map((d) => d.profile_id).filter(Boolean) as string[]),
+  );
+
+  const { data: profileRows, error: profileError } = profileIds.length
+    ? await supabase.from("profiles").select("id, full_name, phone").in("id", profileIds)
+    : { data: [], error: null };
+
+  if (profileError) console.warn("driver profiles enrich failed", profileError.message);
+
+  const profileMap = new Map((profileRows ?? []).map((p) => [p.id, p]));
+
+  for (const d of driverRows ?? []) {
+    const profile = profileMap.get(d.profile_id);
+    result.set(d.id, {
+      id: d.id,
+      full_name: profile?.full_name ?? null,
+      phone: profile?.phone ?? null,
+      verification_status: d.verification_status ?? null,
+    });
+  }
+  return result;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Queries                                                            */
 /* ------------------------------------------------------------------ */
 
-/** All assignments in the org (used by admins / dispatchers). */
+/** Assignments visible to the signed-in user (RLS decides which). */
 export function useAssignments() {
   const { user } = useAuth();
 
@@ -84,9 +128,6 @@ export function useAssignments() {
 /**
  * Assignments created by the currently signed-in agent, enriched with
  * shipment / truck / driver details fetched in follow-up queries.
- *
- * We avoid PostgREST embeds because the FKs aren't guaranteed to exist
- * (or to be named predictably). Fetching related rows by id is bulletproof.
  */
 export function useMyAssignments() {
   const { user } = useAuth();
@@ -95,7 +136,6 @@ export function useMyAssignments() {
     queryKey: ["my-assignments", user?.id],
     enabled: Boolean(user?.id),
     queryFn: async (): Promise<AssignmentWithDetails[]> => {
-      // 1. base rows
       const { data: rows, error } = await supabase
         .from("shipment_assignments")
         .select(ASSIGNMENT_COLUMNS)
@@ -120,8 +160,7 @@ export function useMyAssignments() {
         new Set(assignments.map((a) => a.driver_id).filter(Boolean) as string[]),
       );
 
-      // 2. related rows in parallel
-      const [shipmentsRes, trucksRes, driversRes] = await Promise.all([
+      const [shipmentsRes, trucksRes, driverMap] = await Promise.all([
         shipmentIds.length
           ? supabase
               .from("shipments")
@@ -133,35 +172,19 @@ export function useMyAssignments() {
         truckIds.length
           ? supabase
               .from("trucks")
-              .select(
-                "id, registration_no, truck_type, capacity_tons, verification_status",
-              )
+              .select("id, registration_no, truck_type, capacity_tons, verification_status")
               .in("id", truckIds)
           : Promise.resolve({ data: [], error: null }),
-        driverIds.length
-          ? supabase
-              .from("drivers")
-              .select("id, full_name, phone, verification_status")
-              .in("id", driverIds)
-          : Promise.resolve({ data: [], error: null }),
+        fetchDriverDetails(driverIds),
       ]);
 
       if (shipmentsRes.error)
         console.warn("shipments enrich failed", shipmentsRes.error.message);
-      if (trucksRes.error)
-        console.warn("trucks enrich failed", trucksRes.error.message);
-      if (driversRes.error)
-        console.warn("drivers enrich failed", driversRes.error.message);
+      if (trucksRes.error) console.warn("trucks enrich failed", trucksRes.error.message);
 
-      const shipmentMap = new Map(
-        (shipmentsRes.data ?? []).map((s: any) => [s.id, s]),
-      );
+      const shipmentMap = new Map((shipmentsRes.data ?? []).map((s: any) => [s.id, s]));
       const truckMap = new Map((trucksRes.data ?? []).map((t: any) => [t.id, t]));
-      const driverMap = new Map(
-        (driversRes.data ?? []).map((d: any) => [d.id, d]),
-      );
 
-      // 3. stitch
       return assignments.map<AssignmentWithDetails>((a) => ({
         ...a,
         shipment: shipmentMap.get(a.shipment_id) ?? null,
@@ -192,7 +215,7 @@ export function useAssignment(id: string | null | undefined) {
 
       const a = row as ShipmentAssignment;
 
-      const [shipmentRes, truckRes, driverRes] = await Promise.all([
+      const [shipmentRes, truckRes, driverMap] = await Promise.all([
         a.shipment_id
           ? supabase
               .from("shipments")
@@ -205,27 +228,110 @@ export function useAssignment(id: string | null | undefined) {
         a.truck_id
           ? supabase
               .from("trucks")
-              .select(
-                "id, registration_no, truck_type, capacity_tons, verification_status",
-              )
+              .select("id, registration_no, truck_type, capacity_tons, verification_status")
               .eq("id", a.truck_id)
               .maybeSingle()
           : Promise.resolve({ data: null, error: null }),
-        a.driver_id
-          ? supabase
-              .from("drivers")
-              .select("id, full_name, phone, verification_status")
-              .eq("id", a.driver_id)
-              .maybeSingle()
-          : Promise.resolve({ data: null, error: null }),
+        fetchDriverDetails(a.driver_id ? [a.driver_id] : []),
       ]);
 
       return {
         ...a,
         shipment: (shipmentRes.data as any) ?? null,
         truck: (truckRes.data as any) ?? null,
-        driver: (driverRes.data as any) ?? null,
+        driver: a.driver_id ? driverMap.get(a.driver_id) ?? null : null,
       } as AssignmentWithDetails;
+    },
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Open requests for drivers (broadcast by truck type)                */
+/* ------------------------------------------------------------------ */
+
+export interface OpenRequest {
+  id: string;
+  shipment_id: string;
+  truck_type: string;
+  required_capacity_tons: number;
+  pickup_at: string | null;
+  route_origin: string | null;
+  route_destination: string | null;
+  requirements_notes: string | null;
+  offered_fee_ghs: number | null;
+  created_at: string;
+  cargo_ref: string | null;
+  cargo_description: string | null;
+  weight_kg: number | null;
+}
+
+// These RPCs are new, so they aren't in the generated Supabase types yet.
+// (Once you regenerate types.ts you can call supabase.rpc(...) directly.)
+type LooseRpc = (
+  fn: string,
+  args?: Record<string, unknown>,
+) => Promise<{ data: any; error: { message: string } | null }>;
+const rpc = supabase.rpc.bind(supabase) as unknown as LooseRpc;
+
+/**
+ * Requests that no driver has claimed yet and that match the signed-in
+ * driver's truck type and capacity. Refreshes every 15 seconds.
+ */
+export function useOpenRequests() {
+  const { user } = useAuth();
+
+  return useQuery({
+    queryKey: ["open-requests", user?.id],
+    enabled: Boolean(user?.id),
+    refetchInterval: 15_000,
+    queryFn: async (): Promise<OpenRequest[]> => {
+      const { data, error } = await rpc("open_requests_for_driver");
+      if (error) {
+        console.error("Failed to load open requests", error.message);
+        throw new Error(describeError(error));
+      }
+      return (data ?? []) as OpenRequest[];
+    },
+  });
+}
+
+/** Driver accepts an open request: claims it and creates the trip + QR. */
+export function useAcceptOpenRequest() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (assignmentId: string) => {
+      const { error } = await rpc("accept_open_request", { p_assignment_id: assignmentId });
+      if (error) throw new Error(describeError(error));
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["open-requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["assignments"] });
+      void queryClient.invalidateQueries({ queryKey: ["my-assignments"] });
+      void queryClient.invalidateQueries({ queryKey: ["trips"] });
+      void queryClient.invalidateQueries({ queryKey: ["shipments"] });
+    },
+    onError: () => {
+      // Someone else may have taken it — refresh the list either way.
+      void queryClient.invalidateQueries({ queryKey: ["open-requests"] });
+    },
+  });
+}
+
+/** Driver declines an open request. It is hidden for them only. */
+export function useDeclineOpenRequest() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ assignmentId, reason }: { assignmentId: string; reason?: string }) => {
+      const { error } = await rpc("decline_open_request", {
+        p_assignment_id: assignmentId,
+        p_reason: reason ?? null,
+      });
+      if (error) throw new Error(describeError(error));
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["open-requests"] });
     },
   });
 }
@@ -314,13 +420,15 @@ export function useRequestTruck() {
         p_truck_id: input.truckId ?? undefined,
       });
       if (error) throw new Error(describeError(error));
-      // RPC should return the new assignment id (uuid). If it returns void,
-      // this will be null — the list will still refresh via invalidation.
-      return (data as string | null) ?? null;
+      // The RPC returns the new shipment_assignments row; hand back its id.
+      const row = data as { id?: string } | string | null;
+      if (typeof row === "string") return row;
+      return row?.id ?? null;
     },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["assignments"] });
       void queryClient.invalidateQueries({ queryKey: ["my-assignments"] });
+      void queryClient.invalidateQueries({ queryKey: ["open-requests"] });
       void queryClient.invalidateQueries({ queryKey: ["shipments"] });
     },
   });
@@ -341,11 +449,12 @@ export function useCancelAssignment() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["assignments"] });
       void queryClient.invalidateQueries({ queryKey: ["my-assignments"] });
+      void queryClient.invalidateQueries({ queryKey: ["open-requests"] });
     },
   });
 }
 
-/** Driver accepts or declines an offered job; acceptance creates the trip + QR. */
+/** Driver accepts or declines a job offered directly to them; acceptance creates the trip + QR. */
 export function useRespondToAssignment() {
   const queryClient = useQueryClient();
 
