@@ -377,7 +377,7 @@ export default function RequestTruck() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="fee">Transport fee offered (GHS)</Label>
+              <Label htmlFor="fee">Transport fee offered in (GHS)</Label>
               <Input
                 id="fee"
                 type="number"
