@@ -102,7 +102,6 @@ export interface TripLocation {
 export function useTripLocations(tripId: string | undefined) {
   const queryClient = useQueryClient();
 
-  // 1. Fetch initial trail
   const query = useQuery({
     queryKey: ["trip-locations", tripId],
     enabled: Boolean(tripId),
@@ -113,17 +112,19 @@ export function useTripLocations(tripId: string | undefined) {
         .eq("trip_id", tripId!)
         .order("recorded_at", { ascending: true })
         .limit(200);
-      if (error) throw new Error(describeError(error));
+      if (error) {
+        console.error("Failed to fetch locations:", error.message);
+        throw new Error(describeError(error));
+      }
       return (data ?? []) as TripLocation[];
     },
   });
 
-  // 2. Subscribe to Realtime updates
   useEffect(() => {
     if (!tripId) return;
 
     const channel = supabase
-      .channel(`trip-${tripId}`)
+      .channel(`trip-locations-${tripId}`)
       .on(
         "postgres_changes",
         {
@@ -133,14 +134,16 @@ export function useTripLocations(tripId: string | undefined) {
           filter: `trip_id=eq.${tripId}`,
         },
         (payload) => {
-          // Append the new coordinate to the cached trail instantly
+          console.log("Realtime GPS Ping Received:", payload.new);
           queryClient.setQueryData<TripLocation[]>(["trip-locations", tripId], (old) => {
             const newLoc = payload.new as TripLocation;
             return old ? [...old, newLoc] : [newLoc];
           });
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        console.log("Realtime subscription status:", status);
+      });
 
     return () => {
       void supabase.removeChannel(channel);

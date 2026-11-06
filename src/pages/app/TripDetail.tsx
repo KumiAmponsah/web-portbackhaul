@@ -33,7 +33,6 @@ export default function TripDetail() {
   const { data: history } = useTripHistory(id);
   const { data: locations } = useTripLocations(id);
 
-  // Fetch the real road geometry from Mapbox
   const { data: route } = useRoute(
     trip?.pickup_lat && trip?.pickup_lng ? { lat: trip.pickup_lat, lng: trip.pickup_lng } : null,
     trip?.destination_lat && trip?.destination_lng ? { lat: trip.destination_lat, lng: trip.destination_lng } : null,

@@ -23,7 +23,7 @@ import { formatGhs, formatTime, formatWeight } from "@/lib/format";
 import { statusLabel } from "@/lib/status";
 
 const TRACKED_STATUSES = ["DRIVER_ACCEPTED", "DRIVER_ARRIVED", "LOADING", "LOADED", "IN_TRANSIT", "ARRIVED_DESTINATION"];
-const PUSH_INTERVAL_MS = 10_000; // Send GPS every 10 seconds
+const PUSH_INTERVAL_MS = 10_000; 
 const MIN_MS_BETWEEN_PUSHES = 8_000;
 
 export default function DriverTrip() {
@@ -90,14 +90,12 @@ export default function DriverTrip() {
     return () => { cancelled = true; };
   }, [trip?.id]);
 
-  // Auto-start sharing
   useEffect(() => {
     if (!isTracked) return;
     if (!("geolocation" in navigator)) return;
     setSharing(true);
   }, [isTracked]);
 
-  // GPS Watcher
   useEffect(() => {
     if (!sharing || !trip?.id || !isTracked) return;
     if (!("geolocation" in navigator)) {
@@ -108,7 +106,7 @@ export default function DriverTrip() {
 
     const onSample = (position: GeolocationPosition) => {
       const { latitude, longitude, speed, heading, accuracy } = position.coords;
-      setLivePos({ lat: latitude, lng: longitude }); // Updates UI instantly
+      setLivePos({ lat: latitude, lng: longitude }); 
 
       const now = Date.now();
       if (now - lastPushedAt.current < MIN_MS_BETWEEN_PUSHES) return;

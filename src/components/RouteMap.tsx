@@ -47,34 +47,31 @@ export function RouteMap({
   const truckMarker = useRef<mapboxgl.Marker | null>(null);
   const lastCoords = useRef<string | null>(null);
 
-  // Initialize Map
   useEffect(() => {
     if (!MAPBOX_TOKEN) return;
     mapboxgl.accessToken = MAPBOX_TOKEN;
 
     if (!mapContainer.current || map.current) return;
 
-    // If we have a current truck position, center on that. Otherwise, center on pickup.
     const startPoint = current || pickup || destination || { lng: -0.1869, lat: 5.6037 };
 
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: "mapbox://styles/mapbox/streets-v12",
       center: [startPoint.lng, startPoint.lat],
-      zoom: 13, // Zoomed in a bit more
+      zoom: 13,
       attributionControl: false,
     });
 
     map.current.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-left");
 
     map.current.on("load", () => {
-      // 1. Add the main Route Line (Pickup -> Destination)
+      // 1. Main Route (Pickup -> Destination)
       if (routeGeometry && map.current) {
         map.current.addSource("route", {
           type: "geojson",
           data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: routeGeometry } },
         });
-
         map.current.addLayer({
           id: "route-line",
           type: "line",
@@ -84,45 +81,32 @@ export function RouteMap({
         });
       }
 
-      // 2. Add the "Truck to Pickup" dashed line (Uber style)
-      if (current && pickup && map.current) {
+      // 2. Dashed Link (Truck -> Pickup)
+      if (map.current) {
         map.current.addSource("truck-to-pickup", {
           type: "geojson",
-          data: {
-            type: "Feature",
-            properties: {},
-            geometry: {
-              type: "LineString",
-              coordinates: [[current.lng, current.lat], [pickup.lng, pickup.lat]],
-            },
-          },
+          data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } }, // Start empty
         });
-
         map.current.addLayer({
           id: "truck-to-pickup-line",
           type: "line",
           source: "truck-to-pickup",
           layout: { "line-join": "round", "line-cap": "round" },
-          paint: {
-            "line-color": "#10b981", // Green
-            "line-width": 3,
-            "line-dasharray": [2, 2], // Dashed line
-          },
+          paint: { "line-color": "#10b981", "line-width": 4, "line-dasharray": [2, 2] },
         });
       }
 
-      // 3. Add Pickup & Destination Markers
       if (pickup) new mapboxgl.Marker({ color: "#10b981" }).setLngLat([pickup.lng, pickup.lat]).addTo(map.current!);
       if (destination) new mapboxgl.Marker({ color: "#1B263B" }).setLngLat([destination.lng, destination.lat]).addTo(map.current!);
-
-      // 4. Add Truck Marker
+      
       if (current) createTruckMarker(current);
+      updateDashedLink();
     });
 
     return () => { map.current?.remove(); map.current = null; };
   }, [pickup, destination, routeGeometry]);
 
-  // Smoothly move the truck when coordinates update
+  // Update dashed link and truck marker whenever `current` changes
   useEffect(() => {
     if (!map.current || !current) return;
 
@@ -130,16 +114,26 @@ export function RouteMap({
     if (lastCoords.current === coordStr) return;
     lastCoords.current = coordStr;
 
-    // Move the truck marker
     if (truckMarker.current) {
       truckMarker.current.setLngLat([current.lng, current.lat]);
     } else if (map.current.loaded()) {
       createTruckMarker(current);
     }
 
-    // Update the dashed line from the truck to the pickup point
-    if (pickup && map.current.getSource("truck-to-pickup")) {
-      (map.current.getSource("truck-to-pickup") as mapboxgl.GeoJSONSource).setData({
+    updateDashedLink();
+
+    map.current.easeTo({
+      center: [current.lng, current.lat],
+      duration: 2000, 
+      zoom: 14,       
+    });
+  }, [current, pickup]);
+
+  function updateDashedLink() {
+    if (!map.current || !current || !pickup) return;
+    const source = map.current.getSource("truck-to-pickup") as mapboxgl.GeoJSONSource;
+    if (source) {
+      source.setData({
         type: "Feature",
         properties: {},
         geometry: {
@@ -148,14 +142,7 @@ export function RouteMap({
         },
       });
     }
-
-    // Fly map to follow the truck
-    map.current.easeTo({
-      center: [current.lng, current.lat],
-      duration: 2000, 
-      zoom: 14,       
-    });
-  }, [current, pickup]);
+  }
 
   function createTruckMarker(point: MapPoint) {
     const el = document.createElement("div");
