@@ -47,6 +47,7 @@ export function RouteMap({
   const truckMarker = useRef<mapboxgl.Marker | null>(null);
   const lastCoords = useRef<string | null>(null);
 
+  // Initialize Map
   useEffect(() => {
     if (!MAPBOX_TOKEN) return;
     mapboxgl.accessToken = MAPBOX_TOKEN;
@@ -85,7 +86,7 @@ export function RouteMap({
       if (map.current) {
         map.current.addSource("truck-to-pickup", {
           type: "geojson",
-          data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } }, // Start empty
+          data: { type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: [] } },
         });
         map.current.addLayer({
           id: "truck-to-pickup-line",
@@ -99,14 +100,16 @@ export function RouteMap({
       if (pickup) new mapboxgl.Marker({ color: "#10b981" }).setLngLat([pickup.lng, pickup.lat]).addTo(map.current!);
       if (destination) new mapboxgl.Marker({ color: "#1B263B" }).setLngLat([destination.lng, destination.lat]).addTo(map.current!);
       
-      if (current) createTruckMarker(current);
-      updateDashedLink();
+      if (current) {
+        createTruckMarker(current);
+        updateDashedLink();
+      }
     });
 
     return () => { map.current?.remove(); map.current = null; };
   }, [pickup, destination, routeGeometry]);
 
-  // Update dashed link and truck marker whenever `current` changes
+  // Smoothly move the truck when coordinates update
   useEffect(() => {
     if (!map.current || !current) return;
 
