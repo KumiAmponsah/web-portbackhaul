@@ -45,6 +45,7 @@ export function RouteMap({
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
   const truckMarker = useRef<mapboxgl.Marker | null>(null);
+  const lastCoords = useRef<string | null>(null);
 
   // Initialize Map
   useEffect(() => {
@@ -97,6 +98,11 @@ export function RouteMap({
   useEffect(() => {
     if (!map.current || !current) return;
 
+    // Check if coords actually changed to prevent unnecessary map jumps
+    const coordStr = `${current.lat},${current.lng}`;
+    if (lastCoords.current === coordStr) return;
+    lastCoords.current = coordStr;
+
     if (truckMarker.current) {
       truckMarker.current.setLngLat([current.lng, current.lat]);
     } else if (map.current.loaded()) {
@@ -107,7 +113,7 @@ export function RouteMap({
     map.current.easeTo({
       center: [current.lng, current.lat],
       duration: 2000, // 2 seconds for a smooth glide
-      zoom: 14,       // Zoom in closely to the truck
+      zoom: 14,       
     });
   }, [current]);
 
