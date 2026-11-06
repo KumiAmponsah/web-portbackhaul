@@ -54,20 +54,21 @@ export function RouteMap({
 
     if (!mapContainer.current || map.current) return;
 
+    // If we have a current truck position, center on that. Otherwise, center on pickup.
     const startPoint = current || pickup || destination || { lng: -0.1869, lat: 5.6037 };
 
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: "mapbox://styles/mapbox/streets-v12",
       center: [startPoint.lng, startPoint.lat],
-      zoom: 12,
+      zoom: 13, // Zoomed in a bit more
       attributionControl: false,
     });
 
     map.current.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-left");
 
     map.current.on("load", () => {
-      // Add Route Line
+      // 1. Add the main Route Line (Pickup -> Destination)
       if (routeGeometry && map.current) {
         map.current.addSource("route", {
           type: "geojson",
@@ -79,15 +80,42 @@ export function RouteMap({
           type: "line",
           source: "route",
           layout: { "line-join": "round", "line-cap": "round" },
-          paint: { "line-color": "#1B263B", "line-width": 5, "line-opacity": 0.8 },
+          paint: { "line-color": "#1B263B", "line-width": 4, "line-opacity": 0.5 },
         });
       }
 
-      // Add Markers
+      // 2. Add the "Truck to Pickup" dashed line (Uber style)
+      if (current && pickup && map.current) {
+        map.current.addSource("truck-to-pickup", {
+          type: "geojson",
+          data: {
+            type: "Feature",
+            properties: {},
+            geometry: {
+              type: "LineString",
+              coordinates: [[current.lng, current.lat], [pickup.lng, pickup.lat]],
+            },
+          },
+        });
+
+        map.current.addLayer({
+          id: "truck-to-pickup-line",
+          type: "line",
+          source: "truck-to-pickup",
+          layout: { "line-join": "round", "line-cap": "round" },
+          paint: {
+            "line-color": "#10b981", // Green
+            "line-width": 3,
+            "line-dasharray": [2, 2], // Dashed line
+          },
+        });
+      }
+
+      // 3. Add Pickup & Destination Markers
       if (pickup) new mapboxgl.Marker({ color: "#10b981" }).setLngLat([pickup.lng, pickup.lat]).addTo(map.current!);
       if (destination) new mapboxgl.Marker({ color: "#1B263B" }).setLngLat([destination.lng, destination.lat]).addTo(map.current!);
 
-      // Add Truck Marker
+      // 4. Add Truck Marker
       if (current) createTruckMarker(current);
     });
 
@@ -98,24 +126,36 @@ export function RouteMap({
   useEffect(() => {
     if (!map.current || !current) return;
 
-    // Check if coords actually changed to prevent unnecessary map jumps
     const coordStr = `${current.lat},${current.lng}`;
     if (lastCoords.current === coordStr) return;
     lastCoords.current = coordStr;
 
+    // Move the truck marker
     if (truckMarker.current) {
       truckMarker.current.setLngLat([current.lng, current.lat]);
     } else if (map.current.loaded()) {
       createTruckMarker(current);
     }
 
-    // Ease map to follow the truck
+    // Update the dashed line from the truck to the pickup point
+    if (pickup && map.current.getSource("truck-to-pickup")) {
+      (map.current.getSource("truck-to-pickup") as mapboxgl.GeoJSONSource).setData({
+        type: "Feature",
+        properties: {},
+        geometry: {
+          type: "LineString",
+          coordinates: [[current.lng, current.lat], [pickup.lng, pickup.lat]],
+        },
+      });
+    }
+
+    // Fly map to follow the truck
     map.current.easeTo({
       center: [current.lng, current.lat],
-      duration: 2000, // 2 seconds for a smooth glide
+      duration: 2000, 
       zoom: 14,       
     });
-  }, [current]);
+  }, [current, pickup]);
 
   function createTruckMarker(point: MapPoint) {
     const el = document.createElement("div");
@@ -147,7 +187,9 @@ export function RouteMap({
               <Truck className="h-6 w-6" />
             </div>
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-bold text-foreground">Arriving shortly</p>
+              <p className="text-sm font-bold text-foreground">
+                {current.lat === pickup?.lat && current.lng === pickup?.lng ? "Arrived at pickup" : "Driver is on the way"}
+              </p>
               <p className="mt-0.5 text-xs text-muted-foreground truncate">
                 {driver.truckReg || "Truck"} · {driver.name}
               </p>
