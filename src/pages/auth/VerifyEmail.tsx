@@ -31,7 +31,7 @@ export default function VerifyEmail() {
   const [verified, setVerified] = useState<boolean>(false);
 
   // If already verified and logged in (and not in the middle of token verification), go to app
-  if (user && isEmailVerified && !tokenHash) return <Navigate to="/app" replace />;
+  if (user && isEmailVerified && !tokenHash) return <Navigate to="/" replace />;
 
   async function handleResend() {
     if (!email.trim()) {
@@ -70,7 +70,7 @@ export default function VerifyEmail() {
       
       // Redirect after a short delay so they see the success message
       setTimeout(() => {
-        navigate("/app", { replace: true });
+        navigate("/", { replace: true });
       }, 1500);
     } catch (error) {
       toast.error(describeError(error, "Could not verify email. The link may have expired."));
@@ -86,7 +86,7 @@ export default function VerifyEmail() {
       const { data } = await supabase.auth.getUser();
       if (data.user?.email_confirmed_at) {
         toast.success("Email verified");
-        navigate("/app", { replace: true });
+        navigate("/", { replace: true });
       } else {
         toast.error("We can't see a verification yet. Click the link in the email, then try again.");
       }
