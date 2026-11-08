@@ -15,12 +15,27 @@ import { ROLE_HOME } from "@/lib/roles";
 import { AuthPanel } from "./AuthPanel";
 
 export default function Login() {
-  const { signIn, session, profile, isEmailVerified } = useAuth();
+  // Assuming your useAuth hook provides a `loading` or `isLoading` boolean
+  // If it's named differently, change it here (e.g., isLoading)
+  const { signIn, session, profile, isEmailVerified, loading } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState<string>("");
   const [password, setPassword] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
 
+  // 1. Wait for the auth state and profile to finish loading
+  if (loading) {
+    return (
+      <AuthPanel>
+        <div className="flex h-[50vh] flex-col items-center justify-center space-y-4">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="text-sm text-muted-foreground">Loading your account...</p>
+        </div>
+      </AuthPanel>
+    );
+  }
+
+  // 2. Now we can safely redirect based on the loaded state
   if (session && !isEmailVerified) return <Navigate to="/verify-email" replace />;
   if (session && profile) return <Navigate to={ROLE_HOME[profile.role]} replace />;
 
@@ -30,6 +45,7 @@ export default function Login() {
     try {
       await signIn(email.trim(), password);
       toast.success("Signed in");
+      // Navigate to /app, the AppRouter will handle the role-based redirect
       navigate("/app", { replace: true });
     } catch (error) {
       toast.error(describeError(error, "Could not sign in."));
@@ -99,14 +115,6 @@ export default function Login() {
           Create an account
         </Link>
       </p>
-
-      <DemoHint onPick={(demoEmail) => { setEmail(demoEmail); setPassword("DemoPass123!"); }} />
     </AuthPanel>
   );
-}
-
-
-
-function DemoHint({ onPick }: { onPick: (email: string) => void }) {
-  return null;
 }
