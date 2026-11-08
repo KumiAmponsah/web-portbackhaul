@@ -3,6 +3,7 @@ import {
   CheckCircle2,
   ClipboardList,
   FileText,
+  Loader2,
   MapPin,
   Truck,
   Users,
@@ -34,7 +35,15 @@ const NAV_BY_ROLE: Record<Role, NavItem[]> = {
 /** Role-aware application shell shared by every authenticated non-admin screen. */
 export function AppLayout() {
   const { profile } = useAuth();
-  if (!profile) return null;
+  
+  // Show a spinner while the profile is loading
+  if (!profile) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
 
   return (
     <AppShell nav={NAV_BY_ROLE[profile.role]} sectionLabel={ROLE_LABEL[profile.role]}>
@@ -46,9 +55,29 @@ export function AppLayout() {
 /** /app redirects each role to its own home screen. */
 export function AppIndexRedirect() {
   const { profile } = useAuth();
-  if (!profile) return null;
-  if (profile.account_status !== "APPROVED") return <Navigate to="/app/account-status" replace />;
-  return <Navigate to={ROLE_HOME[profile.role]} replace />;
+  
+  // 1. While loading the profile, show a spinner instead of a blank white screen
+  if (!profile) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+  
+  // 2. Redirect based on account status
+  if (profile.account_status !== "APPROVED") {
+    return <Navigate to="/app/account-status" replace />;
+  }
+  
+  // 3. Redirect to their specific dashboard
+  const homeRoute = ROLE_HOME[profile.role];
+  if (!homeRoute) {
+    // Safe fallback just in case the role isn't in the map
+    return <Navigate to="/app/account-status" replace />;
+  }
+
+  return <Navigate to={homeRoute} replace />;
 }
 
 export type { LucideIcon };
