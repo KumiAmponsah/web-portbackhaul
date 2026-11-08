@@ -15,29 +15,30 @@ import { ROLE_HOME } from "@/lib/roles";
 import { AuthPanel } from "./AuthPanel";
 
 export default function Login() {
-  // Assuming your useAuth hook provides a `loading` or `isLoading` boolean
-  // If it's named differently, change it here (e.g., isLoading)
-  const { signIn, session, profile, isEmailVerified, loading } = useAuth();
+  const { signIn, session, profile, isEmailVerified } = useAuth();
   const navigate = useNavigate();
   const [email, setEmail] = useState<string>("");
   const [password, setPassword] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
 
-  // 1. Wait for the auth state and profile to finish loading
-  if (loading) {
-    return (
-      <AuthPanel>
-        <div className="flex h-[50vh] flex-col items-center justify-center space-y-4">
+  // If there is an active session, handle the redirects safely
+  if (session) {
+    if (!isEmailVerified) return <Navigate to="/verify-email" replace />;
+    
+    // If we have a session but the profile hasn't loaded yet, show a spinner
+    if (!profile) {
+      return (
+        <div className="flex h-screen items-center justify-center">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground">Loading your account...</p>
         </div>
-      </AuthPanel>
-    );
+      );
+    }
+    
+    // Only redirect if we have a valid role
+    if (profile.role && ROLE_HOME[profile.role]) {
+      return <Navigate to={ROLE_HOME[profile.role]} replace />;
+    }
   }
-
-  // 2. Now we can safely redirect based on the loaded state
-  if (session && !isEmailVerified) return <Navigate to="/verify-email" replace />;
-  if (session && profile) return <Navigate to={ROLE_HOME[profile.role]} replace />;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -45,7 +46,7 @@ export default function Login() {
     try {
       await signIn(email.trim(), password);
       toast.success("Signed in");
-      // Navigate to /app, the AppRouter will handle the role-based redirect
+      // Let the app router handle the redirect based on the newly loaded profile
       navigate("/app", { replace: true });
     } catch (error) {
       toast.error(describeError(error, "Could not sign in."));
