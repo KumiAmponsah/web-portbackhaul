@@ -36,7 +36,7 @@ const NAV_BY_ROLE: Record<Role, NavItem[]> = {
 export function AppLayout() {
   const { profile } = useAuth();
   
-  // Show a spinner while the profile is loading
+  // 1. Show a spinner if the profile hasn't loaded yet
   if (!profile) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
@@ -45,8 +45,12 @@ export function AppLayout() {
     );
   }
 
+  // 2. Safety check: Fallback if the role is missing from our NAV map
+  const navItems = NAV_BY_ROLE[profile.role] ?? [];
+  const roleLabel = ROLE_LABEL[profile.role] ?? "Dashboard";
+
   return (
-    <AppShell nav={NAV_BY_ROLE[profile.role]} sectionLabel={ROLE_LABEL[profile.role]}>
+    <AppShell nav={navItems} sectionLabel={roleLabel}>
       <Outlet />
     </AppShell>
   );
@@ -56,7 +60,6 @@ export function AppLayout() {
 export function AppIndexRedirect() {
   const { profile } = useAuth();
   
-  // 1. While loading the profile, show a spinner instead of a blank white screen
   if (!profile) {
     return (
       <div className="flex h-screen w-full items-center justify-center bg-background">
@@ -65,18 +68,12 @@ export function AppIndexRedirect() {
     );
   }
   
-  // 2. Redirect based on account status
   if (profile.account_status !== "APPROVED") {
     return <Navigate to="/app/account-status" replace />;
   }
   
-  // 3. Redirect to their specific dashboard
-  const homeRoute = ROLE_HOME[profile.role];
-  if (!homeRoute) {
-    // Safe fallback just in case the role isn't in the map
-    return <Navigate to="/app/account-status" replace />;
-  }
-
+  // Safety check for the home route
+  const homeRoute = ROLE_HOME[profile.role] ?? "/app/account-status";
   return <Navigate to={homeRoute} replace />;
 }
 
