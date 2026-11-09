@@ -106,7 +106,7 @@ export default function ProfilePage() {
       <PageHeader
         eyebrow="Account"
         title="Profile & verification"
-        subtitle={`Registered as ${ROLE_LABEL[profile.role]}`}
+        subtitle={`Registered as ${ROLE_LABEL[profile.role] ?? profile.role ?? "User"}`}
         meta={
           <div className="flex flex-col items-end gap-1.5">
             <StatusBadge status={profile.account_status} raw />
